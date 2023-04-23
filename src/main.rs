@@ -125,7 +125,7 @@ fn check<C>(c: &Client<C>)
 where
     C: Connect + Clone + Send + Sync + 'static,
 {
-    println!("{:?}", c);
+    info!("{:?}", c);
 }
 
 async fn read_body(mut req: Request<Body>) -> Request<Body> {
@@ -135,7 +135,7 @@ async fn read_body(mut req: Request<Body>) -> Request<Body> {
     let body_bytes = hyper::body::to_bytes(body).await.unwrap();
     let body = std::str::from_utf8(&body_bytes).unwrap();
 
-    info!("body:{}", body);
+    info!("request body:\n\n{}\n", body);
     // reconstruct the Request from parts and the data in `body_bytes`
     req = Request::from_parts(parts, body_bytes.into());
 
@@ -145,8 +145,8 @@ async fn read_body(mut req: Request<Body>) -> Request<Body> {
 async fn read_response(mut resp: Response<Body>) -> Response<Body> {
     // destructure the request so we can get the body & other parts separately
     let (mut parts, body) = resp.into_parts();
-    println!("body: {:?}", body);
-    info!("parts: {:?}", parts);
+    // println!("body: {:?}", body);
+    // info!("parts: {:?}", parts);
     let body_bytes = hyper::body::to_bytes(body).await.unwrap();
 
     use std::io::Read;
@@ -157,10 +157,10 @@ async fn read_response(mut resp: Response<Body>) -> Response<Body> {
         decoder.read_to_end(&mut decoded_data).unwrap();
         // println!("{:?}", body_bytes);
         let body = String::from_utf8(decoded_data).unwrap();
-        info!("response:{}", body);
+        info!("response:\n\n{}\n", body);
     } else {
         let body = std::str::from_utf8(&body_bytes).unwrap();
-        info!("response:{}", body);
+        info!("response:\n\n{}\n", body);
     }
     // now we have all data so we just disable chunk and send all data
     parts.headers.remove("transfer-encoding");
