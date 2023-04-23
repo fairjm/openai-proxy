@@ -1,9 +1,13 @@
 use std::{env, net::SocketAddr, time::SystemTime};
 
 use axum::{extract::State, http::HeaderValue, response::Response, routing::any, Router};
-use hyper::{client::HttpConnector, Body, Client, Request, StatusCode, Uri};
+use hyper::{
+    client::{connect::Connect, HttpConnector},
+    Body, Client, Request, StatusCode, Uri,
+};
 use hyper_proxy::{Intercept, Proxy, ProxyConnector};
 use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
+use libflate::gzip::Decoder;
 use tracing::{info, log::warn};
 use tracing_subscriber::{prelude::__tracing_subscriber_SubscriberExt, util::SubscriberInitExt};
 
@@ -80,10 +84,18 @@ async fn handler(
             .insert("host", HeaderValue::from_static("api.openai.com"));
         *req.uri_mut() = Uri::try_from(uri.clone()).unwrap();
 
+        req = read_body(req).await;
+
         let started = SystemTime::now();
         let r = match client {
-            ClientEnum::Proxy(client) => client.request(req),
-            ClientEnum::Http(client) => client.request(req),
+            ClientEnum::Proxy(client) => {
+                check(&client);
+                client.request(req)
+            }
+            ClientEnum::Http(client) => {
+                check(&client);
+                client.request(req)
+            }
         }
         .await
         .map_err(|e| {
@@ -95,11 +107,67 @@ async fn handler(
             uri,
             started.elapsed().unwrap().as_millis()
         );
-        r
+        if let Ok(resp) = r {
+            let new_resp = read_response(resp).await;
+            Ok(new_resp)
+        } else {
+            r
+        }
     } else {
         Ok(Response::builder()
             .status(StatusCode::OK)
             .body(Body::empty())
             .unwrap())
     }
+}
+
+fn check<C>(c: &Client<C>)
+where
+    C: Connect + Clone + Send + Sync + 'static,
+{
+    println!("{:?}", c);
+}
+
+async fn read_body(mut req: Request<Body>) -> Request<Body> {
+    // code from https://stackoverflow.com/questions/75849660/how-to-use-the-body-of-a-hyperrequest-without-consuming-it
+    // destructure the request so we can get the body & other parts separately
+    let (parts, body) = req.into_parts();
+    let body_bytes = hyper::body::to_bytes(body).await.unwrap();
+    let body = std::str::from_utf8(&body_bytes).unwrap();
+
+    info!("body:{}", body);
+    // reconstruct the Request from parts and the data in `body_bytes`
+    req = Request::from_parts(parts, body_bytes.into());
+
+    return req;
+}
+
+async fn read_response(mut resp: Response<Body>) -> Response<Body> {
+    // destructure the request so we can get the body & other parts separately
+    let (mut parts, body) = resp.into_parts();
+    println!("body: {:?}", body);
+    info!("parts: {:?}", parts);
+    let body_bytes = hyper::body::to_bytes(body).await.unwrap();
+
+    use std::io::Read;
+
+    if parts.headers.get("content-encoding").is_some() {
+        let mut decoder = Decoder::new(&body_bytes[..]).unwrap();
+        let mut decoded_data = Vec::new();
+        decoder.read_to_end(&mut decoded_data).unwrap();
+        // println!("{:?}", body_bytes);
+        let body = String::from_utf8(decoded_data).unwrap();
+        info!("response:{}", body);
+    } else {
+        let body = std::str::from_utf8(&body_bytes).unwrap();
+        info!("response:{}", body);
+    }
+    // now we have all data so we just disable chunk and send all data
+    parts.headers.remove("transfer-encoding");
+    parts
+        .headers
+        .insert("Content-Length", HeaderValue::from(body_bytes.len()));
+    resp = Response::from_parts(parts, body_bytes.into());
+
+    return resp;
 }
