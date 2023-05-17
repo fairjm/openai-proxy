@@ -80,8 +80,15 @@ async fn handler(
         };
         let uri = format!("https://api.openai.com{}{}", &path, query);
         info!("request to {}", uri);
+        // info!("headers:{:?}", req.headers());
         req.headers_mut()
             .insert("host", HeaderValue::from_static("api.openai.com"));
+        // fix: some lib may set version to 2022 if host is not openai, but openai doesn't accept it. 
+        req.headers_mut()
+            .insert("openai-version", HeaderValue::from_static("2020-11-07"));
+        // not support br, just replace it with gzip
+        req.headers_mut()
+            .insert("accept-encoding", HeaderValue::from_static("gzip"));
         *req.uri_mut() = Uri::try_from(uri.clone()).unwrap();
 
         req = read_body(req).await;
@@ -108,6 +115,7 @@ async fn handler(
             started.elapsed().unwrap().as_millis()
         );
         if let Ok(resp) = r {
+            // info!("response header:{:?}", resp.headers());
             let new_resp = read_response(resp).await;
             Ok(new_resp)
         } else {
